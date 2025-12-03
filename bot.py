@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import yt_dlp
 import asyncio
 import re
-import random  # 新增：用于随机播放
+import random
 
 # 1. 加载 .env 文件中的 Token
 load_dotenv()
@@ -22,23 +22,21 @@ bot = discord.Client(intents=intents)
 
 # --- 全局变量 ---
 song_queue = []
-current_song_info = None  # 新增：记录当前正在播放的歌 (用于循环)
-loop_mode = 0             # 新增：0=关闭, 1=单曲循环, 2=列表循环
+current_song_info = None
+loop_mode = 0  # 0=关闭, 1=列表循环
 
 # --- 智能 FFmpeg 路径设置 ---
-# 如果系统是 Windows (nt)，使用硬编码的本地路径
 if os.name == 'nt':
-    # 请确保这个路径是您电脑上ffmpeg.exe的真实路径
+    # Windows: 请确保路径正确
     FFMPEG_EXECUTABLE_PATH = r"C:\Users\Admin\Desktop\DoggoMusic\ffmpeg-full_build\bin\ffmpeg.exe"
-# 否则（在服务器/Linux上），直接使用系统命令
 else:
+    # Linux/Server
     FFMPEG_EXECUTABLE_PATH = 'ffmpeg'
 
 # 4. 机器人上线事件
 @bot.event
 async def on_ready():
-  print(f'🥳 Bot {bot.user} has successfully logged in and is online!')
-
+    print(f'🥳 机器人 {bot.user} 已成功登录并上线！')
 
 # 5. 消息/命令处理中心
 @bot.event
@@ -52,99 +50,91 @@ async def on_message(message):
     if message.content.startswith('!play'):
         search_query = message.content[len('!play'):].strip()
         if not search_query:
-            await message.channel.send("Please enter a song name or link after !play")
+            await message.channel.send("请在 `!play` 后面输入歌曲名称或链接。")
             return
         
-        await message.channel.send(f"🔍 Received playback request: {search_query}. Searching...")
+        await message.channel.send(f"🔍 收到请求，处理中...")
         await handle_play_command(message, search_query)
 
     # --- !stop (停止并清空) ---
     elif message.content.startswith('!stop'):
         if message.guild.voice_client:
-            song_queue.clear() # 清空队列
-            loop_mode = 0      # 重置循环模式
+            song_queue.clear()
+            loop_mode = 0
             message.guild.voice_client.stop()
             await message.guild.voice_client.disconnect()
-            await message.channel.send("🛑 Stopped playing, cleared the queue, and disconnected.")
+            await message.channel.send("🛑 已停止播放，清空队列并断开连接。")
         else:
-            await message.channel.send("The bot is currently not connected to any voice channel.")
+            await message.channel.send("机器人当前没有连接到任何语音频道。")
 
     # --- !skip (跳过当前) ---
     elif message.content.startswith('!skip'):
         if message.guild.voice_client and message.guild.voice_client.is_playing():
-            # 如果是单曲循环模式，跳过时临时关掉循环，否则会跳不出去
-            if loop_mode == 1:
-                await message.channel.send("⏭️ 跳过当前（单曲循环暂停一次）...")
-                # 这里我们在 after_playing 里处理逻辑，不用改 loop_mode 变量，
-                # 只需要强制停止，逻辑会进入下一首
-            else:
-                await message.channel.send("⏭️ 已跳过当前歌曲！")
-            
             message.guild.voice_client.stop() 
+            await message.channel.send("⏭️ 已跳过当前歌曲！")
         else:
             await message.channel.send("当前没有正在播放的音乐。")
 
     # --- !queue (查看队列) ---
     elif message.content.startswith('!queue'):
         if not song_queue:
-            status = "📭 Playlist is Empty。"
+            status = "📭 当前播放队列为空。"
         else:
-            status = "📋 **PlayList:**\n"
+            status = "📋 **待播放队列:**\n"
             for i, (m, u, title) in enumerate(song_queue[:10]):
                 status += f"**{i+1}.** {title}\n"
             if len(song_queue) > 10:
                 status += f"... 还有 {len(song_queue)-10} 首"
         
         # 显示当前循环状态
-        modes = ["❌ Close", "🔂 Single Loop", "🔁 Loop The List"]
-        status += f"\n**Mode:** {modes[loop_mode]}"
+        modes = ["❌ 关闭", "🔁 列表循环"]
+        status += f"\n**循环模式:** {modes[loop_mode]}"
         
         await message.channel.send(status)
 
-    # --- !loop (切换循环模式) [新功能] ---
+    # --- !loop (切换循环模式) ---
     elif message.content.startswith('!loop'):
-        loop_mode = (loop_mode + 1) % 3 # 在 0, 1, 2 之间切换
-        modes = ["❌ Loop Close", "🔂 Single Loop On", "🔁 Loop On"]
+        loop_mode = (loop_mode + 1) % 2 
+        modes = ["❌ 循环已关闭", "🔁 列表循环开启"]
         await message.channel.send(f"{modes[loop_mode]}")
 
-    # --- !shuffle (随机播放) [新功能] ---
+    # --- !shuffle (随机播放) ---
     elif message.content.startswith('!shuffle'):
         if len(song_queue) < 2:
-            await message.channel.send("Lack of Song(<1)。")
+            await message.channel.send("队列里的歌太少，没法随机。")
         else:
             random.shuffle(song_queue)
-            await message.channel.send("🔀 Everyday Iam shuffling！")
+            await message.channel.send("🔀 队列已打乱！")
 
-    # --- !remove (移除歌曲) [新功能] ---
+    # --- !remove (移除歌曲) ---
     elif message.content.startswith('!remove'):
         try:
-            # 获取用户输入的数字
             index = int(message.content[len('!remove'):].strip()) - 1
             if 0 <= index < len(song_queue):
                 removed_song = song_queue.pop(index)
-                await message.channel.send(f"🗑️ removed liao : **{removed_song[2]}**")
+                await message.channel.send(f"🗑️ 已从队列移除: **{removed_song[2]}**")
             else:
-                await message.channel.send("Not Found，Please Check。")
+                await message.channel.send("找不到这首歌，请检查 !queue 的编号。")
         except:
-            await message.channel.send("Please select correct Num，Eg: `!remove 3`")
+            await message.channel.send("请输入正确的格式，例如: `!remove 1`")
 
     # --- !pause / !resume ---
     elif message.content.startswith('!pause'):
         if message.guild.voice_client and message.guild.voice_client.is_playing():
             message.guild.voice_client.pause()
-            await message.channel.send("⏸️ Life stopped。")
+            await message.channel.send("⏸️ 音乐已暂停。")
             
     elif message.content.startswith('!resume'):
         if message.guild.voice_client and message.guild.voice_client.is_paused():
             message.guild.voice_client.resume()
-            await message.channel.send("▶️ Life goes on。")
+            await message.channel.send("▶️ 音乐继续播放。")
 
 # 6. 处理搜索和URL识别逻辑
 async def handle_play_command(message, query):
     YOUTUBE_URL_REGEX = r"(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=|embed\/|v\/)?([a-zA-Z0-9_-]+)"
     
     if not message.author.voice or not message.author.voice.channel:
-        await message.channel.send("You join Channel first！")
+        await message.channel.send("您必须先加入一个语音频道！")
         return
 
     is_url = re.match(YOUTUBE_URL_REGEX, query)
@@ -153,8 +143,17 @@ async def handle_play_command(message, query):
     if is_url:
         video_id = is_url.group(1)
         final_url = f"https://www.youtube.com/watch?v={video_id}"
-        await message.channel.send(f"🔗 Detect dou youtube link ready to play ...")
-        return await play_song(message, final_url, title="URL 点歌")
+        
+        # 获取标题
+        loop = asyncio.get_event_loop()
+        try:
+            data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL({'quiet':True, 'extract_flat':True}).extract_info(final_url, download=False))
+            video_title = data.get('title', '未知歌曲')
+        except:
+            video_title = "未知 YouTube 歌曲"
+
+        await message.channel.send(f"🔗 链接识别: **{video_title}**")
+        return await play_song(message, final_url, title=video_title)
         
     # 情况 2: 输入的是关键词 (搜索)
     else:
@@ -171,17 +170,17 @@ async def handle_play_command(message, query):
             data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YDL_SEARCH_OPTIONS).extract_info(query, download=False))
             results = data.get('entries', [])
             if not results:
-                return await message.channel.send("not found any result。")
+                return await message.channel.send("未找到任何结果。")
 
             search_list = []
             for i, video in enumerate(results[:5]):
                 title = video.get('title', '未知标题')
                 search_list.append(f"**{i+1}.** {title}")
 
-            await message.channel.send("Please select (1-5)，auto cancel after 30s ：\n\n" + "\n".join(search_list))
+            await message.channel.send("请回复编号 (1-5)，30秒自动取消：\n\n" + "\n".join(search_list))
 
         except Exception as e:
-            return await message.channel.send(f"Search Wrong: {e}")
+            return await message.channel.send(f"搜索错误: {e}")
         
         def check(m):
             return (m.author == message.author and 
@@ -194,21 +193,21 @@ async def handle_play_command(message, query):
             selected_index = int(selection_message.content) - 1
             selected_video = results[selected_index]
             
-            # 提取干净的 URL
+            # --- 修正点：直接使用 url 字段，绝不回退到 webpage_url ---
             final_url = selected_video.get('url')
-            if not final_url: final_url = selected_video.get('url')
+            # 如果真的没有 url，那宁愿报错也不能给脏链接，所以这里不再写 fallback
 
-            video_title = selected_video.get('title', 'Unknown Title')
+            video_title = selected_video.get('title', '未知歌曲')
             await message.channel.send(f"✅ 已选择 **{video_title}**")
             await play_song(message, final_url, title=video_title)
 
         except asyncio.TimeoutError:
-            await message.channel.send("Timeout。")
+            await message.channel.send("超时取消。")
         except Exception as e:
-            await message.channel.send(f"Choose Wrong: {e}")
+            await message.channel.send(f"选择错误: {e}")
 
-# 7. 核心播放函数 (含队列、循环、自动断开逻辑)
-async def play_song(message, url, title="Unknown Title"):
+# 7. 核心播放函数
+async def play_song(message, url, title="未知歌曲"):
     global song_queue, current_song_info
     
     voice_client = message.guild.voice_client
@@ -216,15 +215,15 @@ async def play_song(message, url, title="Unknown Title"):
         try:
             voice_client = await message.author.voice.channel.connect()
         except Exception as e:
-            return await message.channel.send(f"Connect failed: {e}")
+            return await message.channel.send(f"连接语音失败: {e}")
             
     # 如果正在播放，加入队列
     if voice_client.is_playing():
         song_queue.append((message, url, title))
-        await message.channel.send(f"📝 **{title}** In Queue (place: {len(song_queue)})")
+        await message.channel.send(f"📝 **{title}** 已加入队列 (位置: {len(song_queue)})")
         return
 
-    # 更新当前播放信息 (用于循环功能)
+    # 更新当前播放信息
     current_song_info = (message, url, title)
 
     # 提取流链接
@@ -243,15 +242,21 @@ async def play_song(message, url, title="Unknown Title"):
         
         stream_url = None
         if 'entries' in data: data = data['entries'][0]
+        
+        # 1. 优先找直接的 url
         stream_url = data.get('url')
+        
+        # 2. 如果没有，在 formats 里找
         if not stream_url and data.get('formats'):
             for f in data['formats']:
                 if f.get('url') and f.get('acodec') != 'none':
                     stream_url = f['url']
                     break
-        if not stream_url and data.get('webpage_url'): stream_url = data['webpage_url']
         
-        if not stream_url: raise Exception("无法提取有效流")
+        # --- 修正点：删除了 data.get('webpage_url') 的回退 ---
+        # 如果没有找到流媒体链接，就抛出异常，而不是用网页链接去糊弄 FFmpeg
+        
+        if not stream_url: raise Exception("无法提取有效流媒体链接")
 
     except Exception as e:
         print(f"提取失败: {e}")
@@ -269,16 +274,8 @@ async def play_song(message, url, title="Unknown Title"):
         def after_playing(error):
             if error: print(f"播放错误: {error}")
             
-            # --- 核心循环逻辑 ---
-            # 模式 1: 单曲循环
+            # --- 列表循环逻辑 ---
             if loop_mode == 1:
-                # 重新播放当前这首
-                coro = play_song(current_song_info[0], current_song_info[1], current_song_info[2])
-                future = asyncio.run_coroutine_threadsafe(coro, bot.loop)
-                return
-
-            # 模式 2: 列表循环 (把刚才唱完的这首加到队尾)
-            if loop_mode == 2:
                 song_queue.append(current_song_info)
             
             # --- 播放下一首逻辑 ---
@@ -297,13 +294,12 @@ async def play_song(message, url, title="Unknown Title"):
     except Exception as e:
         await message.channel.send(f"播放错误: {e}")
 
-# 新增：自动断开连接的逻辑 (等待 5 分钟)
+# 自动断开连接 (等待 120 秒 / 2分钟)
 async def auto_disconnect(voice_client):
-    await asyncio.sleep(300) # 等待 300 秒 (5分钟)
-    # 醒来后检查：1. 是否还在连接 2. 是否在播放 3. 队列是否为空
+    await asyncio.sleep(120) 
     if voice_client.is_connected() and not voice_client.is_playing() and len(song_queue) == 0:
         await voice_client.disconnect()
-        print("🤖 Over 5 min, auto disconnect。")
+        print("🤖 闲置超时(2分钟)，已自动断开。")
 
 # 8. 启动
 if DISCORD_TOKEN:
